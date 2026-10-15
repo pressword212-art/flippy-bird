@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>উড়ান</title>
+<link href="https://fonts.googleapis.com/css2?family=Hind+Siliguri:wght@500;700&display=swap" rel="stylesheet">
+<style>
+  :root { --ink:#17313a; --paper:#fff8e7; --accent:#e4572e; }
+  * { box-sizing:border-box; }
+  html, body { height:100%; margin:0; }
+  body {
+    display:flex; align-items:center; justify-content:center;
+    background:#0f2a33; color:var(--ink);
+    font-family:'Hind Siliguri', system-ui, sans-serif;
+  }
+  #wrap { position:relative; height:min(96vh, 144vw); aspect-ratio:2/3; }
+  canvas { width:100%; height:100%; display:block; border-radius:14px; touch-action:none; cursor:pointer; }
+  #overlay {
+    position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+    background:rgba(15,42,51,.45); border-radius:14px;
+  }
+  #overlay[hidden] { display:none; }
+  .panel {
+    background:var(--paper); padding:28px 36px; border-radius:16px; text-align:center;
+    min-width:240px; box-shadow:0 10px 30px rgba(0,0,0,.35);
+  }
+  .panel h2 { margin:0 0 12px; font-size:28px; }
+  .panel p { margin:4px 0; font-size:20px; }
+  .panel button {
+    margin-top:18px; padding:10px 26px; font:700 20px inherit; font-family:inherit;
+    color:#fff; background:var(--accent); border:0; border-radius:999px; cursor:pointer;
+  }
+  .panel button:hover { filter:brightness(1.08); }
+  .panel button:focus-visible { outline:3px solid var(--ink); outline-offset:3px; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="c" aria-label="উড়ান গেম"></canvas>
+  <div id="overlay" hidden>
+    <div class="panel">
+      <h2>গেম ওভার</h2>
+      <p>স্কোর: <b id="finalScore">০</b></p>
+      <p>সর্বোচ্চ: <b id="bestScore">০</b></p>
+      <button id="restart" type="button">আবার খেলুন</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  const cv = document.getElementById('c');
+  const ctx = cv.getContext('2d');
+  const overlay = document.getElementById('overlay');
+  const W = 400, H = 600, GROUND = 70, FLOOR = H - GROUND;
+  const PW = 64, GAP = 165, SPACING = 230;      // পাইপের প্রস্থ, ফাঁক, দুই পাইপের দূরত্ব
+  const BX = 100, R = 14;                        // পাখির x-অবস্থান ও ব্যাসার্ধ
+  const GRAVITY = 1500, JUMP = -430;
+  const bn = n => n.toLocaleString('bn-BD');
+
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  cv.width = W * dpr; cv.height = H * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  let state, bird, pipes, score, best = 0, speed, groundX, t, clouds, canRestart, overTimer;
+  try { best = +localStorage.getItem('uran-best') || 0; } catch (e) {}
+
+  function reset() {
+    clearTimeout(overTimer);
+    state = 'ready';
+    bird = { y: H / 2 - 40, vy: 0, rot: 0 };
+    pipes = []; score = 0; speed = 150; groundX = 0; t = 0; canRestart = false;
+    clouds = [{x:40,y:90,s:1},{x:220,y:160,s:.8},{x:340,y:60,s:1.2},{x:130,y:230,s:.7}];
+    overlay.hidden = true;
+  }
+
+  const flap = () => { bird.vy = JUMP; };
+
+  function action() {
+    if (state === 'ready') { state = 'play'; flap(); }
+    else if (state === 'play') flap();
+    else if (state === 'over' && canRestart) reset();
+  }
+
+  function die() {
+    state = 'over';
+    if (score > best) {
+      best = score;
+      try { localStorage.setItem('uran-best', best); } catch (e) {}
+    }
+    overTimer = setTimeout(() => {
+      document.getElementById('finalScore').textContent = bn(score);
+      document.getElementById('bestScore').textContent = bn(best);
+      overlay.hidden = false;
+      canRestart = true;
+    }, 450);
+  }
+
+  function update(dt) {
+    t += dt;
+    clouds.forEach(c => { c.x -= (state === 'over' ? 0 : speed * .15) * dt; if (c.x < -80) c.x = W + 60; });
+    if (state !== 'over') groundX = (groundX - speed * dt) % 40;
+
+    if (state === 'ready') { bird.y = H / 2 - 40 + Math.sin(t * 4) * 8; return; }
+
+    bird.vy += GRAVITY * dt;
+    bird.y += bird.vy * dt;
+    bird.rot = Math.max(-0.5, Math.min(1.2, bird.vy / 600));
+
+    if (state === 'over') {
+      if (bird.y > FLOOR - R) { bird.y = FLOOR - R; bird.vy = 0; }
+      return;
+    }
+
+    if (bird.y < R) { bird.y = R; bird.vy = 0; }
+
+    // স্কোর বাড়লে গতি বাড়ে
+    speed = Math.min(150 + score * 7, 330);
+
+    pipes.forEach(p => p.x -= speed * dt);
+    if (!pipes.length || pipes[pipes.length - 1].x < W - SPACING) {
+      pipes.push({ x: W + 10, top: 60 + Math.random() * (FLOOR - GAP - 120), passed: false });
+    }
+    pipes = pipes.filter(p => p.x > -PW - 10);
+
+    const hit = R - 3;
+    for (const p of pipes) {
+      if (!p.passed && p.x + PW < BX - R) { p.passed = true; score++; }
+      if (BX + hit > p.x && BX - hit < p.x + PW &&
+          (bird.y - hit < p.top || bird.y + hit > p.top + GAP)) { die(); return; }
+    }
+    if (bird.y + hit >= FLOOR) { bird.y = FLOOR - R; die(); }
+  }
+
+  /* ---------- আঁকা ---------- */
+  function bamboo(x, y, h, capOnTop) {
+    const g = ctx.createLinearGradient(x, 0, x + PW, 0);
+    g.addColorStop(0, '#4d7a2c'); g.addColorStop(.45, '#8ab84c'); g.addColorStop(1, '#3f6b2a');
+    ctx.fillStyle = g;
+    ctx.fillRect(x + 4, y, PW - 8, h);
+    ctx.fillStyle = '#2f5420';
+    for (let k = 1; ; k++) {
+      const ny = capOnTop ? y + 22 + k * 48 : y + h - 22 - k * 48 - 4;
+      if (ny < y || ny > y + h) break;
+      ctx.fillRect(x + 4, ny, PW - 8, 4);
+    }
+    const cy = capOnTop ? y : y + h - 22;
+    ctx.fillStyle = g; ctx.fillRect(x, cy, PW, 22);
+    ctx.strokeStyle = '#2f5420'; ctx.lineWidth = 2; ctx.strokeRect(x + 1, cy + 1, PW - 2, 20);
+  }
+
+  function drawBird() {
+    ctx.save();
+    ctx.translate(BX, bird.y); ctx.rotate(bird.rot);
+    ctx.fillStyle = '#1f8fb5'; ctx.beginPath(); ctx.ellipse(0, 0, R + 3, R, 0, 0, 7); ctx.fill();
+    ctx.fillStyle = '#f08a3c'; ctx.beginPath(); ctx.ellipse(2, 5, R - 2, R - 7, 0, 0, 7); ctx.fill();
+    const f = Math.sin(t * (state === 'play' ? 22 : 8)) * 5;
+    ctx.fillStyle = '#14688a'; ctx.beginPath(); ctx.ellipse(-4, 2 + f / 2, 8, 5 + Math.abs(f) / 2, -.3, 0, 7); ctx.fill();
+    ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(7, -4, 4.5, 0, 7); ctx.fill();
+    ctx.fillStyle = '#17313a'; ctx.beginPath(); ctx.arc(8.5, -4, 2, 0, 7); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(14, -2); ctx.lineTo(25, 2); ctx.lineTo(14, 6); ctx.fill();
+    ctx.restore();
+  }
+
+  function text(str, x, y, size, fill = '#fff8e7') {
+    ctx.font = `700 ${size}px "Hind Siliguri", system-ui, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.lineWidth = 5; ctx.strokeStyle = '#17313a'; ctx.lineJoin = 'round';
+    ctx.strokeText(str, x, y); ctx.fillStyle = fill; ctx.fillText(str, x, y);
+  }
+
+  function draw() {
+    const sky = ctx.createLinearGradient(0, 0, 0, FLOOR);
+    sky.addColorStop(0, '#ffc27a'); sky.addColorStop(1, '#fff1d6');
+    ctx.fillStyle = sky; ctx.fillRect(0, 0, W, H);
+
+    ctx.fillStyle = 'rgba(255,140,60,.55)'; ctx.beginPath(); ctx.arc(300, 140, 48, 0, 7); ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,.7)';
+    clouds.forEach(c => {
+      ctx.beginPath();
+      ctx.ellipse(c.x, c.y, 34 * c.s, 12 * c.s, 0, 0, 7);
+      ctx.ellipse(c.x + 18 * c.s, c.y - 8 * c.s, 20 * c.s, 11 * c.s, 0, 0, 7);
+      ctx.fill();
+    });
+
+    pipes.forEach(p => {
+      bamboo(p.x, 0, p.top, false);
+      bamboo(p.x, p.top + GAP, FLOOR - p.top - GAP, true);
+    });
+
+    ctx.fillStyle = '#8a6a3b'; ctx.fillRect(0, FLOOR, W, GROUND);
+    ctx.fillStyle = '#6b9a3a'; ctx.fillRect(0, FLOOR, W, 12);
+    ctx.fillStyle = '#5a8230';
+    for (let x = groundX - 40; x < W + 40; x += 40) {
+      ctx.beginPath(); ctx.moveTo(x, FLOOR); ctx.lineTo(x + 20, FLOOR); ctx.lineTo(x + 8, FLOOR + 12); ctx.lineTo(x - 12, FLOOR + 12); ctx.fill();
+    }
+
+    drawBird();
+
+    if (state === 'ready') {
+      text('উড়ান', W / 2, 150, 56);
+      text('শুরু করতে স্পেসবার চাপুন', W / 2, 400, 22);
+      text('(মোবাইলে স্ক্রিনে ট্যাপ করুন)', W / 2, 430, 16);
+    } else {
+      text(bn(score), W / 2, 80, 52);
+      if (state === 'play') text('গতি ' + bn(Math.round(speed / 150 * 10) / 10) + 'x', W / 2, 110, 16);
+    }
+  }
+
+  /* ---------- ইনপুট ---------- */
+  window.addEventListener('keydown', e => {
+    if (e.code === 'Space') { e.preventDefault(); if (!e.repeat) action(); }
+  });
+  cv.addEventListener('pointerdown', e => { e.preventDefault(); action(); });
+  document.getElementById('restart').addEventListener('click', e => { reset(); e.currentTarget.blur(); });
+
+  /* ---------- গেম লুপ ---------- */
+  let last = performance.now();
+  function loop(now) {
+    const dt = Math.min((now - last) / 1000, 1 / 30);
+    last = now;
+    update(dt); draw();
+    requestAnimationFrame(loop);
+  }
+  reset();
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
